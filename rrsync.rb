@@ -8,6 +8,32 @@ require 'Getopt/Declare'
 
 include Getopt
 
+class Time
+  def yesterday
+    self - 86400
+  end
+end
+
+def get_last_backup_dir(backup_path)
+  # we're willing to try and go back at most 1 week before we say screw it
+  count = 7
+  backup_day = Time.now.yesterday
+  possible_dir = backup_path + "/" + backup_day.strftime('%Y%m%d')
+  while not File.directory?(possible_dir) and count < 7
+    backup_day = backup_day.yesterday
+    possible_dir = backup_path + "/" + backup_day.strftime('%Y%m%d')
+    count = count + 1
+  end
+
+  if count == 7
+    # we looked 7days back and couldn't find anything, no reason to leave
+    # our backup out that far
+    backup_day = Time.now.yesterday
+    possible_dir = backup_path + "/" + backup_day.strftime('%Y%m%d')
+  end
+  return possible_dir
+end
+
 #============================= OPTIONS ==============================#
 # == Options for local machine.
 SSH_APP       = 'ssh'
@@ -26,7 +52,7 @@ options = Getopt::Declare.new(<<EOF)
 EOF
   
 exclude_file  = options["-e"]
-remote_dir = options["-r"]
+remote_dir    = options["-r"]
 log_file      = options["-l"]
 log_age       = options["-a"]
 
@@ -35,23 +61,18 @@ EMPTY_DIR     = '/tmp/empty_rsync_dir/' #NEEDS TRAILING SLASH. TODO: replace thi
 remote_backup_target    = options["-t"]
 remote_user             = options["-u"]
 ssh_port                = '' unless options["-p"]
-backup_dir              = options["-b"] + '/' + Time.now.strftime('%Y%m%d')
+# determine the previous backup directory
+link_dir                = get_last_backup_dir(options["-b"])
+backup_dir              = options["-b"] + "/" + Time.now.strftime('%Y%m%d')
+
 
 RSYNC_VERBOSE           = '-v'
-RSYNC_OPTS = "--force --ignore-errors --delete-excluded --exclude-from=#{exclude_file} --delete --backup --backup-dir=#{backup_dir} -a --bwlimit=200 #{options["-n"]}"
+RSYNC_OPTS = "--force --ignore-errors --delete-excluded --exclude-from=#{exclude_file} --delete --backup --bwlimit=200 -a -p -t --numeric-ids --link-dest=#{link_dir} #{options["-n"]}"
+   
 
-# == Options to control output
-DEBUG         = true #If true output to screen else output is sent to log file.
-SILENT        = false #Total silent = no log or screen output.
-#========================== END OF OPTIONS ==========================#
 
-if DEBUG && !SILENT
-  logger = Logger.new(STDOUT, log_age)
-elsif log_file != '' && !SILENT
-  logger = Logger.new(log_file, log_age)
-else
-  logger = Logger.new(nil)
-end
+logger = Logger.new(STDOUT, log_age)
+
 ssh_port = ssh_port.empty? ? '' : "-e 'ssh -p #{ssh_port}'"
 rsync_cleanout_cmd = "#{RSYNC_APP} #{RSYNC_VERBOSE} #{ssh_port} --delete -a #{EMPTY_DIR} #{backup_dir}"
 rsync_cmd = "#{RSYNC_APP} #{RSYNC_VERBOSE} #{ssh_port} #{RSYNC_OPTS} #{remote_user}@#{remote_backup_target}:#{remote_dir} #{backup_dir}"
@@ -69,6 +90,7 @@ run_time = Benchmark.realtime do
 #      logger.error("#{rsync_cleanout_cmd}\n#{tmp_stderr}") unless tmp_stderr.empty?
 #    }
     Dir.mkdir(backup_dir) unless File.directory?(backup_dir) 
+    puts rsync_cmd
     Open3::popen3("#{rsync_cmd}") { |stdin, stdout, stderr|
       tmp_stdout = stdout.read.strip
       tmp_stderr = stderr.read.strip

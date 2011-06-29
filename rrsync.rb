@@ -14,15 +14,18 @@ class Time
   end
 end
 
+
 def get_last_backup_dir(backup_path)
+  logger = Logger.new(STDOUT)
   # we're willing to try and go back at most 1 week before we say screw it
-  count = 7
+  count = 0
   backup_day = Time.now.yesterday
   possible_dir = backup_path + "/" + backup_day.strftime('%Y%m%d')
-  while not File.directory?(possible_dir) and count < 7
+  while count < 7 and !File.directory?(possible_dir)
     backup_day = backup_day.yesterday
     possible_dir = backup_path + "/" + backup_day.strftime('%Y%m%d')
     count = count + 1
+    logger.debug("going back to try " + backup_day.strftime('%Y%m%d'))
   end
 
   if count == 7
@@ -31,6 +34,7 @@ def get_last_backup_dir(backup_path)
     backup_day = Time.now.yesterday
     possible_dir = backup_path + "/" + backup_day.strftime('%Y%m%d')
   end
+  logger.debug possible_dir
   return possible_dir
 end
 
@@ -41,6 +45,7 @@ RSYNC_APP     = 'rsync'
 
 options = Getopt::Declare.new(<<EOF)
   -e <file>     file of exclusions  [optional]
+  -i <file>     file of iclusions  [optional]
   -r <rdir>     remote directory to backup [required]
   -b <bdir>     local backup directory repository [required]
   -l <file>     log file location [optional]
@@ -65,14 +70,23 @@ ssh_port                = '' unless options["-p"]
 link_dir                = get_last_backup_dir(options["-b"])
 backup_dir              = options["-b"] + "/" + Time.now.strftime('%Y%m%d')
 
+excludes                = '' unless options["-e"]
+includes                = '' unless options["-i"]
+
+if excludes != ''
+  excludes = "--exclude-from=#{options["-e"]}"
+end
+
+if includes != ''
+  includes = "--include-from=#{options["-i"]}"
+end
 
 RSYNC_VERBOSE           = '-v'
-RSYNC_OPTS = "--force --ignore-errors --delete-excluded --exclude-from=#{exclude_file} --delete --backup --bwlimit=200 -a -p -t --numeric-ids --link-dest=#{link_dir} #{options["-n"]}"
+RSYNC_OPTS = "--force --ignore-errors --delete-excluded --delete --backup --bwlimit=200 -z -a -p -t --numeric-ids --link-dest=#{link_dir} #{excludes} #{includes} #{options["-n"]}"
    
 
 
-logger = Logger.new(STDOUT, log_age)
-
+logger = Logger.new(STDOUT,log_age)
 ssh_port = ssh_port.empty? ? '' : "-e 'ssh -p #{ssh_port}'"
 rsync_cleanout_cmd = "#{RSYNC_APP} #{RSYNC_VERBOSE} #{ssh_port} --delete -a #{EMPTY_DIR} #{backup_dir}"
 rsync_cmd = "#{RSYNC_APP} #{RSYNC_VERBOSE} #{ssh_port} #{RSYNC_OPTS} #{remote_user}@#{remote_backup_target}:#{remote_dir} #{backup_dir}"
